@@ -1,1 +1,1102 @@
-111111
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>手势识别粒子系统</title>
+
+  <!-- MediaPipe 依赖 -->
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
+
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      overflow: hidden;
+      background: #0a0a1e;
+      font-family: Arial, sans-serif;
+    }
+
+    #container {
+      position: relative;
+      width: 100vw;
+      height: 100vh;
+    }
+
+    #canvas {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+    }
+
+    #video {
+      position: absolute;
+      top: 10px;
+      right: 10px;
+      width: 200px;
+      height: 150px;
+      border: 2px solid #4a90e2;
+      border-radius: 8px;
+      transform: scaleX(-1);
+      z-index: 10;
+    }
+
+    #controls {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      background: rgba(0, 0, 0, 0.7);
+      backdrop-filter: blur(10px);
+      padding: 15px;
+      border-radius: 10px;
+      color: #fff;
+      z-index: 10;
+      max-width: 260px;
+    }
+
+    .control-group {
+      margin-bottom: 12px;
+    }
+
+    .control-group label {
+      display: block;
+      font-size: 12px;
+      margin-bottom: 5px;
+      color: #aaa;
+    }
+
+    .control-group input[type="range"] {
+      width: 100%;
+    }
+
+    .status {
+      padding: 8px;
+      border-radius: 5px;
+      font-size: 12px;
+      margin-bottom: 10px;
+    }
+
+    .status.waiting {
+      background: rgba(255, 165, 0, 0.2);
+      border: 1px solid orange;
+    }
+
+    .status.ready {
+      background: rgba(0, 255, 0, 0.2);
+      border: 1px solid lime;
+    }
+
+    .gesture-info {
+      background: rgba(100, 100, 255, 0.2);
+      padding: 8px;
+      border-radius: 5px;
+      font-size: 11px;
+      margin-top: 10px;
+      line-height: 1.5;
+    }
+
+    h3 {
+      font-size: 14px;
+      margin-bottom: 10px;
+      color: #4a90e2;
+    }
+  </style>
+</head>
+<body>
+  <div id="container">
+    <canvas id="canvas"></canvas>
+    <video id="video" autoplay playsinline></video>
+
+    <div id="controls">
+      <h3>🎮 手势控制粒子系统</h3>
+
+      <div id="status" class="status waiting">
+        正在初始化摄像头...
+      </div>
+
+      <div id="speedIndicator" style="font-size: 10px; color: #888; margin-bottom: 10px; display: none;">
+        移动速度: <span id="speedValue">0</span>
+      </div>
+
+      <div class="control-group">
+        <label>
+          粒子数量:
+          <span id="particleCountValue">600</span>
+        </label>
+        <input
+          type="range"
+          id="particleCount"
+          min="200"
+          max="1200"
+          value="600"
+        />
+      </div>
+
+      <div class="control-group">
+        <label>
+          交互强度:
+          <span id="forceValue">1.0</span>
+        </label>
+        <input
+          type="range"
+          id="force"
+          min="0.5"
+          max="3"
+          step="0.1"
+          value="1.0"
+        />
+      </div>
+
+      <div class="control-group">
+        <label>
+          <input type="checkbox" id="trailMode" checked />
+          拖尾效果
+        </label>
+      </div>
+
+      <div class="control-group">
+        <label>
+          <input type="checkbox" id="rainbowMode" />
+          彩虹模式
+        </label>
+      </div>
+
+      <div class="gesture-info">
+        <strong>手势说明：</strong><br />
+        ✋ 张开手掌 - 吸引粒子<br />
+        ✊ 握紧拳头 - 排斥粒子<br />
+        ☝️ 伸出食指 - 发射粒子<br />
+        🤏 捏合手势 - 形成旋转球体（地球）<br />
+        ✌️ 胜利手势 - 粒子爆炸<br />
+        👌 OK手势 - 粒子旋转<br />
+        ☝️ 比 1 手势 - 拼成文字
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d');
+    const video = document.getElementById('video');
+    const statusDiv = document.getElementById('status');
+
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
+
+    let particles = [];
+    let handData = null;
+    let previousHandData = null;
+    let particleCount = 600;
+    let forceMultiplier = 1.0;
+    let trailMode = true;
+    let rainbowMode = false;
+    let rainbowHue = 0;
+    let explosions = [];
+    let previousPalmX = 0;
+    let previousPalmY = 0;
+    let handSpeed = 0;
+    let textTargets = []; // 文字目标位置
+    let isFormingText = false; // 是否正在形成文字
+    let isSphereMode = false; // 是否处于立体球模式
+    let sphereRotation = 0; // 球体旋转角度
+
+    // 简单判断是否为手机设备，用于做一些自适应调整
+    const isMobile = /Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+
+    // 爆炸效果类
+    class Explosion {
+      constructor(x, y, color) {
+        this.x = x;
+        this.y = y;
+        this.particles = [];
+        this.color = color;
+        for (let i = 0; i < 20; i++) {
+          this.particles.push({
+            x: x,
+            y: y,
+            vx: (Math.random() - 0.5) * 10,
+            vy: (Math.random() - 0.5) * 10,
+            life: 1,
+            size: Math.random() * 4 + 2,
+          });
+        }
+      }
+
+      update() {
+        this.particles = this.particles.filter((p) => {
+          p.x += p.vx;
+          p.y += p.vy;
+          p.vx *= 0.95;
+          p.vy *= 0.95;
+          p.life -= 0.02;
+          return p.life > 0;
+        });
+        return this.particles.length > 0;
+      }
+
+      draw() {
+        this.particles.forEach((p) => {
+          ctx.beginPath();
+          ctx.arc(p.x, p.y, p.size * p.life, 0, Math.PI * 2);
+          ctx.fillStyle = this.color;
+          ctx.globalAlpha = p.life;
+          ctx.fill();
+          ctx.globalAlpha = 1;
+        });
+      }
+    }
+
+    // 粒子类
+    class Particle {
+      constructor() {
+        this.reset();
+        this.trail = [];
+        this.maxTrailLength = 8;
+        this.life = 1;
+        this.maxLife = 1;
+      }
+
+      reset() {
+        this.x = Math.random() * canvas.width;
+        this.y = Math.random() * canvas.height;
+        this.vx = (Math.random() - 0.5) * 2;
+        this.vy = (Math.random() - 0.5) * 2;
+        this.size = Math.random() * 2 + 0.8; // 减小粒子大小，让更多粒子可见
+        this.hue = Math.random() * 60 + 180;
+        this.trail = [];
+        this.life = 1;
+        this.maxLife = 1;
+        this.rotation = 0;
+        this.rotationSpeed = (Math.random() - 0.5) * 0.1;
+        this.targetX = null; // 目标X位置（用于文字形成）
+        this.targetY = null; // 目标Y位置（用于文字形成）
+        this.sphereLat = null; // 球体模式：纬度
+        this.sphereLon = null; // 球体模式：经度
+      }
+
+      update(hands) {
+        // 记录轨迹
+        if (trailMode) {
+          this.trail.push({ x: this.x, y: this.y });
+          if (this.trail.length > this.maxTrailLength) {
+            this.trail.shift();
+          }
+        }
+
+        // 如果处于立体球模式，优先沿球体轨道运动
+        if (isSphereMode && this.sphereLat !== null && this.sphereLon !== null) {
+          const cx = canvas.width / 2;
+          const cy = canvas.height / 2;
+          const radius = Math.min(canvas.width, canvas.height) * 0.25;
+
+          // 3D 球坐标
+          const lat = this.sphereLat;
+          const lon = this.sphereLon + sphereRotation;
+
+          const x3 = Math.cos(lat) * Math.cos(lon);
+          const y3 = Math.sin(lat);
+          const z3 = Math.cos(lat) * Math.sin(lon);
+
+          // 简单透视缩放（z 越大越靠前）
+          const depth = (z3 + 1) / 2; // 0~1
+          const scale = 0.3 + depth * 0.7;
+
+          const targetX = cx + x3 * radius * scale * 1.2;
+          const targetY = cy + y3 * radius * scale * 1.2;
+
+          const dxSphere = targetX - this.x;
+          const dySphere = targetY - this.y;
+          const distSphere = Math.sqrt(dxSphere * dxSphere + dySphere * dySphere);
+
+          const sphereForce = Math.min(0.25, distSphere / 100) * 0.25;
+          this.vx += dxSphere * sphereForce;
+          this.vy += dySphere * sphereForce;
+
+          this.vx *= 0.9;
+          this.vy *= 0.9;
+
+          this.x += this.vx;
+          this.y += this.vy;
+
+          // 球体模式下的颜色：模拟地球蓝绿色
+          const baseHue = 200 + depth * 40; // 200~240
+          this.hue = rainbowMode ? (rainbowHue + depth * 60) % 360 : baseHue;
+          this.size = 1.5 + depth * 2; // 前景粒子更大
+
+          return;
+        }
+
+        // 边界反弹
+        if (this.x < 0 || this.x > canvas.width) this.vx *= -1;
+        if (this.y < 0 || this.y > canvas.height) this.vy *= -1;
+
+        this.x = Math.max(0, Math.min(canvas.width, this.x));
+        this.y = Math.max(0, Math.min(canvas.height, this.y));
+
+        // 手势影响
+        if (hands) {
+          const palmX = hands.palmX * canvas.width;
+          const palmY = hands.palmY * canvas.height;
+          const dx = palmX - this.x;
+          const dy = palmY - this.y;
+          const dist = Math.sqrt(dx * dx + dy * dy);
+          const radius = 400 + handSpeed * 80; // 扩大影响范围，速度影响范围
+
+          if (dist < radius) {
+            const force = ((radius - dist) / radius) * forceMultiplier * (1 + handSpeed * 0.5);
+            const angle = Math.atan2(dy, dx);
+
+            // 根据距离动态调整粒子大小
+            this.size = Math.max(0.8, Math.min(4, 1.5 + (radius - dist) / radius * 2.5));
+
+            if (hands.gesture === 'open') {
+              // 张开手掌 - 吸引（增强效果）
+              const attractForce = force * (1.2 + (radius - dist) / radius * 0.8); // 距离越近吸引力越强
+              this.vx += Math.cos(angle) * attractForce;
+              this.vy += Math.sin(angle) * attractForce;
+              this.hue = rainbowMode ? (rainbowHue + dist * 2) % 360 : 280;
+            } else if (hands.gesture === 'closed') {
+              // 握拳 - 排斥
+              this.vx -= Math.cos(angle) * force * 1.2;
+              this.vy -= Math.sin(angle) * force * 1.2;
+              this.hue = rainbowMode ? (rainbowHue + dist * 2) % 360 : 0;
+            } else if (hands.gesture === 'pointing') {
+              // 食指 - 发射
+              this.vx -= Math.cos(angle) * force * 2;
+              this.vy -= Math.sin(angle) * force * 2;
+              this.hue = rainbowMode ? (rainbowHue + dist * 2) % 360 : 30;
+            } else if (hands.gesture === 'victory') {
+              // 胜利手势 - 爆炸效果 + 跟随手指
+              const explosionForce = force * 3;
+              this.vx += (Math.random() - 0.5) * explosionForce;
+              this.vy += (Math.random() - 0.5) * explosionForce;
+              
+              // 跟随食指和中指
+              if (hands.landmarks && hands.landmarks[8] && hands.landmarks[12]) {
+                const indexX = hands.landmarks[8].x * canvas.width;
+                const indexY = hands.landmarks[8].y * canvas.height;
+                const middleX = hands.landmarks[12].x * canvas.width;
+                const middleY = hands.landmarks[12].y * canvas.height;
+                const avgX = (indexX + middleX) / 2;
+                const avgY = (indexY + middleY) / 2;
+                
+                const followDx = avgX - this.x;
+                const followDy = avgY - this.y;
+                const followDist = Math.sqrt(followDx * followDx + followDy * followDy);
+                
+                if (followDist < 150) {
+                  this.vx += followDx * 0.02;
+                  this.vy += followDy * 0.02;
+                }
+              }
+              
+              this.hue = rainbowMode ? (rainbowHue + dist * 2) % 360 : (dist * 2) % 360;
+            } else if (hands.gesture === 'ok') {
+              // OK手势 - 旋转
+              this.rotation += 0.1;
+              const rotX = Math.cos(this.rotation) * (this.x - palmX) - Math.sin(this.rotation) * (this.y - palmY) + palmX;
+              const rotY = Math.sin(this.rotation) * (this.x - palmX) + Math.cos(this.rotation) * (this.y - palmY) + palmY;
+              this.vx += (rotX - this.x) * 0.1;
+              this.vy += (rotY - this.y) * 0.1;
+              this.hue = rainbowMode ? (rainbowHue + dist * 2) % 360 : 200;
+            }
+          }
+        }
+
+        // 比 1 手势形成文字时，强制移动到目标位置（不受手势影响范围限制）
+        if (isFormingText && this.targetX !== null && this.targetY !== null) {
+          const targetDx = this.targetX - this.x;
+          const targetDy = this.targetY - this.y;
+          const targetDist = Math.sqrt(targetDx * targetDx + targetDy * targetDy);
+          
+          if (targetDist > 2) {
+            // 强吸引力，让粒子快速移动到目标位置
+            const textForce = Math.min(0.3, targetDist / 100) * 0.25;
+            this.vx += targetDx * textForce;
+            this.vy += targetDy * textForce;
+            this.vx *= 0.92; // 增加阻尼
+            this.vy *= 0.92;
+            
+            // 更新颜色和大小
+            // 参与拼字的粒子用偏粉色区分
+            this.hue = rainbowMode ? (rainbowHue + targetDist * 2) % 360 : 320;
+            this.size = Math.max(1.8, Math.min(3.5, 2.5 + (100 - targetDist) / 100 * 1));
+          } else {
+            // 已经到达目标位置
+            this.x = this.targetX;
+            this.y = this.targetY;
+            this.vx *= 0.7;
+            this.vy *= 0.7;
+            this.hue = rainbowMode ? rainbowHue % 360 : 320;
+            this.size = 2.5;
+          }
+        }
+
+        // 阻尼（在手部附近时增加阻尼，让粒子更容易聚集）
+        let damping = 0.98;
+        if (hands) {
+          const palmX = hands.palmX * canvas.width;
+          const palmY = hands.palmY * canvas.height;
+          const dx = palmX - this.x;
+          const dy = palmY - this.y;
+          const dist = Math.sqrt(dx * dx + dy * dy);
+          if (dist < 150 && hands.gesture === 'open') {
+            damping = 0.95; // 在手部附近时增加阻尼
+          }
+        }
+        this.vx *= damping;
+        this.vy *= damping;
+
+        this.x += this.vx;
+        this.y += this.vy;
+
+        // 无手势时缓慢变回基色
+        if (!hands) {
+          this.hue += (200 - this.hue) * 0.05;
+          this.size = Math.max(1, this.size * 0.99);
+        }
+      }
+
+      draw() {
+        // 绘制拖尾
+        if (trailMode && this.trail.length > 1) {
+          ctx.save();
+          ctx.shadowBlur = 0; // 关闭阴影以减轻拖尾的性能压力
+          ctx.beginPath();
+          ctx.moveTo(this.trail[0].x, this.trail[0].y);
+          for (let i = 1; i < this.trail.length; i++) {
+            const alpha = i / this.trail.length * 0.5;
+            ctx.strokeStyle = `hsla(${this.hue}, 70%, 60%, ${alpha})`;
+            ctx.lineWidth = this.size * (i / this.trail.length);
+            ctx.lineTo(this.trail[i].x, this.trail[i].y);
+            ctx.stroke();
+            ctx.beginPath();
+            ctx.moveTo(this.trail[i].x, this.trail[i].y);
+          }
+          ctx.restore();
+        }
+
+        // 绘制粒子
+        ctx.save();
+        ctx.beginPath();
+        ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
+        ctx.fillStyle = `hsla(${this.hue}, 70%, 60%, 0.8)`;
+        ctx.fill();
+        ctx.shadowBlur = 8; // 降低阴影模糊半径，提升性能
+        ctx.shadowColor = `hsla(${this.hue}, 70%, 60%, 0.6)`;
+        
+        // 外圈光晕
+        ctx.beginPath();
+        ctx.arc(this.x, this.y, this.size * 1.5, 0, Math.PI * 2);
+        ctx.strokeStyle = `hsla(${this.hue}, 70%, 60%, 0.3)`;
+        ctx.lineWidth = 1;
+        ctx.stroke();
+        ctx.restore();
+      }
+    }
+
+    // 初始化粒子
+    function initParticles() {
+      particles = [];
+      for (let i = 0; i < particleCount; i++) {
+        particles.push(new Particle());
+      }
+    }
+
+    // 根据设备类型自适应初始粒子数量和滑块范围（手机上默认少一点，保证流畅）
+    (function adaptForDevice() {
+      const particleSlider = document.getElementById('particleCount');
+      const particleValueSpan = document.getElementById('particleCountValue');
+      if (!particleSlider || !particleValueSpan) return;
+
+      if (isMobile) {
+        particleCount = 450;
+        particleSlider.min = 150;
+        particleSlider.max = 900;
+        particleSlider.value = particleCount;
+        particleValueSpan.textContent = particleCount;
+      } else {
+        particleCount = 600;
+        particleSlider.min = 200;
+        particleSlider.max = 1200;
+        particleSlider.value = particleCount;
+        particleValueSpan.textContent = particleCount;
+      }
+    })();
+
+    initParticles();
+
+    // 生成文字粒子位置
+    function generateTextParticles(text) {
+      const tempCanvas = document.createElement('canvas');
+      const tempCtx = tempCanvas.getContext('2d');
+      tempCanvas.width = canvas.width;
+      tempCanvas.height = canvas.height;
+      
+      // 使用支持中文的字体，并根据当前画布大小自适应字号
+      const baseSize = Math.min(canvas.width, canvas.height);
+      // 手机上字稍微小一点，避免超出屏幕
+      const fontSize = baseSize * (isMobile ? 0.22 : 0.28);
+
+      tempCtx.fillStyle = '#ffffff';
+      tempCtx.font = `bold ${fontSize}px "Microsoft YaHei", "SimHei", Arial, sans-serif`;
+      tempCtx.textAlign = 'center';
+      tempCtx.textBaseline = 'middle';
+      
+      // 在canvas中心绘制文字
+      tempCtx.fillText(text, canvas.width / 2, canvas.height / 2);
+      
+      // 获取像素数据
+      const imageData = tempCtx.getImageData(0, 0, canvas.width, canvas.height);
+      const data = imageData.data;
+      const positions = [];
+      
+      // 采样像素，获取文字位置（每隔几个像素采样一次，避免粒子过多）
+      const step = 2; // 减小采样步长，让文字更清晰
+      for (let y = 0; y < canvas.height; y += step) {
+        for (let x = 0; x < canvas.width; x += step) {
+          const index = (y * canvas.width + x) * 4;
+          // 检查像素是否在文字范围内（alpha > 0）
+          if (data[index + 3] > 128) {
+            positions.push({ x, y });
+          }
+        }
+      }
+      
+      // 如果位置太少，增加采样密度
+      if (positions.length < particleCount * 0.5) {
+        const step2 = 1;
+        for (let y = 0; y < canvas.height; y += step2) {
+          for (let x = 0; x < canvas.width; x += step2) {
+            const index = (y * canvas.width + x) * 4;
+            if (data[index + 3] > 128) {
+              // 避免重复添加
+              const exists = positions.some(p => Math.abs(p.x - x) < 2 && Math.abs(p.y - y) < 2);
+              if (!exists) {
+                positions.push({ x, y });
+              }
+            }
+          }
+        }
+      }
+      
+      return positions;
+    }
+
+    // 手势识别逻辑
+    function detectGesture(landmarks) {
+      const fingerTips = [8, 12, 16, 20];
+      const fingerBases = [5, 9, 13, 17];
+      const thumbTip = 4;
+      const thumbBase = 2;
+
+      let extendedFingers = [];
+      let extendedCount = 0;
+
+      // 检测每个手指是否伸展（指尖 y 比指根 y 更小）
+      for (let i = 0; i < fingerTips.length; i++) {
+        const isExtended = landmarks[fingerTips[i]].y < landmarks[fingerBases[i]].y;
+        extendedFingers.push(isExtended);
+        if (isExtended) extendedCount++;
+      }
+
+      // 检测拇指是否张开（x 距离）
+      const thumbExtended =
+        Math.abs(landmarks[thumbTip].x - landmarks[thumbBase].x) > 0.05;
+
+      // 捏合检测（拇指和食指距离）
+      const thumbIndexDist = Math.sqrt(
+        Math.pow(landmarks[thumbTip].x - landmarks[8].x, 2) +
+          Math.pow(landmarks[thumbTip].y - landmarks[8].y, 2)
+      );
+
+      // OK手势检测（拇指和食指形成圆圈，其他手指收起）
+      const thumbMiddleDist = Math.sqrt(
+        Math.pow(landmarks[thumbTip].x - landmarks[12].x, 2) +
+          Math.pow(landmarks[thumbTip].y - landmarks[12].y, 2)
+      );
+      const isOK = thumbIndexDist < 0.08 && 
+                   thumbMiddleDist < 0.08 && 
+                   !extendedFingers[2] && 
+                   !extendedFingers[3];
+
+      // 地球手势检测（拇指和食指形成圆圈，同时中指、无名指、小指都张开）
+      const isSphere = thumbIndexDist < 0.08 && 
+                       thumbMiddleDist < 0.08 && 
+                       extendedFingers[1] &&  // 中指张开
+                       extendedFingers[2] &&   // 无名指张开
+                       extendedFingers[3];     // 小指张开
+
+      // 胜利手势检测（食指和中指伸出，其他收起）
+      const isVictory = extendedFingers[0] && 
+                        extendedFingers[1] && 
+                        !extendedFingers[2] && 
+                        !extendedFingers[3] &&
+                        !thumbExtended;
+
+      // 比 1 手势检测（只伸出食指，其它手指收起）
+      // 容忍拇指位置，不强制要求拇指完全收起，避免过于严格导致识别不到
+      const isOne = extendedFingers[0] && 
+                    !extendedFingers[1] && 
+                    !extendedFingers[2] && 
+                    !extendedFingers[3];
+
+      if (isOne) {
+        return 'one';
+      } else if (isSphere) {
+        return 'sphere';
+      } else if (isOK) {
+        return 'ok';
+      } else if (isVictory) {
+        return 'victory';
+      } else if (thumbIndexDist < 0.05) {
+        // 捏合也视作地球手势，取消原本的“聚拢粒子”功能
+        return 'sphere';
+      } else if (extendedCount >= 4 && thumbExtended) {
+        return 'open';
+      } else if (extendedCount === 1 && landmarks[8].y < landmarks[5].y) {
+        return 'pointing';
+      } else if (extendedCount <= 1) {
+        return 'closed';
+      }
+
+      return 'neutral';
+    }
+
+    // 初始化 MediaPipe Hands
+    const hands = new Hands({
+      locateFile: (file) =>
+        `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`,
+    });
+
+    hands.setOptions({
+      maxNumHands: 1,
+      modelComplexity: 1,
+      minDetectionConfidence: 0.5,
+      minTrackingConfidence: 0.5,
+    });
+
+    hands.onResults((results) => {
+      if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+        const landmarks = results.multiHandLandmarks[0];
+        const gesture = detectGesture(landmarks);
+        const palm = landmarks[9];
+
+        // 计算手部移动速度
+        if (previousPalmX !== 0 && previousPalmY !== 0) {
+          const dx = (palm.x - previousPalmX) * canvas.width;
+          const dy = (palm.y - previousPalmY) * canvas.height;
+          handSpeed = Math.min(1, Math.sqrt(dx * dx + dy * dy) / 100);
+        }
+        previousPalmX = palm.x;
+        previousPalmY = palm.y;
+
+        // 检测手势切换，触发爆炸效果
+        if (previousHandData && previousHandData.gesture !== gesture) {
+          if (gesture === 'victory' || gesture === 'closed') {
+            const px = palm.x * canvas.width;
+            const py = palm.y * canvas.height;
+            const colors = {
+              victory: 'rgba(255, 200, 0, 0.8)',
+              closed: 'rgba(255, 100, 100, 0.8)',
+            };
+            explosions.push(new Explosion(px, py, colors[gesture] || 'rgba(255, 255, 255, 0.8)'));
+          }
+          
+          // 从比 1 手势切换到其他手势时，清除文字目标
+          if (previousHandData.gesture === 'one' && gesture !== 'one') {
+            isFormingText = false;
+            particles.forEach(p => {
+              p.targetX = null;
+              p.targetY = null;
+            });
+          }
+        }
+
+        // 计算是否触发球体模式（单手手势：拇指和食指形成圆圈，其他三指张开）
+        const sphereNow = gesture === 'sphere';
+
+        // 模式切换：进入或退出球体模式
+        if (sphereNow && !isSphereMode) {
+          isSphereMode = true;
+          isFormingText = false;
+          textTargets = [];
+          // 为每个粒子分配球面坐标（均匀分布）
+          const N = particles.length;
+          const goldenAngle = Math.PI * (3 - Math.sqrt(5));
+          particles.forEach((p, i) => {
+            const t = N > 1 ? i / (N - 1) : 0.5;
+            const y = 1 - 2 * t; // -1..1
+            const r = Math.sqrt(1 - y * y);
+            const theta = goldenAngle * i;
+            p.sphereLat = Math.asin(y);
+            p.sphereLon = theta;
+            p.targetX = null;
+            p.targetY = null;
+          });
+        } else if (!sphereNow && isSphereMode) {
+          isSphereMode = false;
+          // 退出球体模式，清除球体坐标
+          particles.forEach((p) => {
+            p.sphereLat = null;
+            p.sphereLon = null;
+          });
+        }
+
+        // 检测到比 1 手势时，生成文字粒子位置（非球体模式下才生效）
+        if (!isSphereMode && gesture === 'one') {
+          if (!isFormingText || textTargets.length === 0) {
+            isFormingText = true;
+            // 根据当前画布大小自适应字号，生成“孙加欣”文字点阵
+            textTargets = generateTextParticles('孙加欣');
+
+            // 只用一部分粒子拼字：选择靠近屏幕中心的粒子
+            const centerX = canvas.width / 2;
+            const centerY = canvas.height / 2;
+
+            // 复制一份带距离信息的粒子数组
+            const particlesWithDist = particles.map((p, idx) => {
+              const dx = p.x - centerX;
+              const dy = p.y - centerY;
+              return { p, idx, dist: Math.sqrt(dx * dx + dy * dy) };
+            });
+
+            // 按距离从近到远排序
+            particlesWithDist.sort((a, b) => a.dist - b.dist);
+
+            // 参与拼字的粒子数量（不超过文字点数的 60%，也不超过总粒子的 60%）
+            const maxTextParticles = Math.min(
+              Math.floor(particles.length * 0.6),
+              Math.floor(textTargets.length * 0.6)
+            );
+
+            // 先清空所有粒子的 target
+            particles.forEach((particle) => {
+              particle.targetX = null;
+              particle.targetY = null;
+            });
+
+            // 让距离中心最近的一部分粒子参与拼字
+            for (let i = 0; i < maxTextParticles; i++) {
+              const { p } = particlesWithDist[i];
+              const targetIndex = Math.floor(
+                (i / Math.max(1, maxTextParticles - 1)) * (textTargets.length - 1)
+              );
+              p.targetX = textTargets[targetIndex].x;
+              p.targetY = textTargets[targetIndex].y;
+            }
+          }
+        }
+
+        previousHandData = { gesture, palmX: palm.x, palmY: palm.y };
+
+        handData = {
+          palmX: palm.x,
+          palmY: palm.y,
+          gesture,
+          landmarks,
+        };
+
+        const gestureNames = {
+          open: '✋ 张开手掌',
+          closed: '✊ 握拳',
+          pointing: '☝️ 食指',
+          pinch: '🤏 捏合',
+          victory: '✌️ 胜利手势',
+          ok: '👌 OK手势',
+          one: '☝️ 比 1 手势',
+          sphere: '🌍 地球手势',
+          neutral: '🖐️ 自然',
+        };
+
+        statusDiv.className = 'status ready';
+        if (isSphereMode) {
+          statusDiv.textContent = '手势: 🔄 双手交叉 - 星球模式';
+        } else {
+          statusDiv.textContent = `手势: ${
+            gestureNames[gesture] || gesture
+          }`;
+        }
+
+        // 更新速度指示器
+        const speedIndicator = document.getElementById('speedIndicator');
+        const speedValue = document.getElementById('speedValue');
+        if (speedIndicator && speedValue) {
+          speedIndicator.style.display = 'block';
+          speedValue.textContent = (handSpeed * 100).toFixed(0) + '%';
+          speedValue.style.color = handSpeed > 0.5 ? '#ff6b6b' : handSpeed > 0.3 ? '#ffd93d' : '#6bcf7f';
+        }
+      } else {
+        handData = null;
+        previousHandData = null;
+        handSpeed = 0;
+        statusDiv.className = 'status waiting';
+        statusDiv.textContent = '等待检测手势...';
+        
+        // 清除文字形成状态
+        if (isFormingText) {
+          isFormingText = false;
+          particles.forEach(p => {
+            p.targetX = null;
+            p.targetY = null;
+          });
+        }
+        
+        const speedIndicator = document.getElementById('speedIndicator');
+        if (speedIndicator) {
+          speedIndicator.style.display = 'none';
+        }
+      }
+    });
+
+    // 启动摄像头
+    const camera = new Camera(video, {
+      onFrame: async () => {
+        await hands.send({ image: video });
+      },
+      width: 640,
+      height: 480,
+    });
+
+    camera.start();
+
+    // 动画循环
+    function animate() {
+      // 更新彩虹模式
+      if (rainbowMode) {
+        rainbowHue = (rainbowHue + 1) % 360;
+      }
+
+      // 背景拖影
+      ctx.fillStyle = 'rgba(10, 10, 30, 0.15)';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      // 更新和绘制爆炸效果
+      explosions = explosions.filter((explosion) => {
+        explosion.update();
+        explosion.draw();
+        return explosion.particles.length > 0;
+      });
+
+      // 球体模式下，整体旋转
+      if (isSphereMode) {
+        sphereRotation += 0.01;
+      }
+
+      // 绘制手掌范围与骨架（非球体模式下展示）
+      if (handData && !isSphereMode) {
+        const px = handData.palmX * canvas.width;
+        const py = handData.palmY * canvas.height;
+        const radius = 400 + handSpeed * 80;
+
+        // 绘制影响范围
+        ctx.beginPath();
+        ctx.arc(px, py, radius, 0, Math.PI * 2);
+
+        const colors = {
+          open: 'rgba(150, 100, 255, 0.2)',
+          closed: 'rgba(255, 100, 100, 0.2)',
+          pointing: 'rgba(255, 150, 50, 0.2)',
+          pinch: 'rgba(100, 255, 150, 0.2)',
+          victory: 'rgba(255, 200, 0, 0.3)',
+          ok: 'rgba(100, 200, 255, 0.2)',
+          one: 'rgba(255, 100, 150, 0.3)',
+          sphere: 'rgba(100, 200, 255, 0.4)',
+        };
+
+        ctx.strokeStyle =
+          colors[handData.gesture] || 'rgba(100, 100, 255, 0.2)';
+        ctx.lineWidth = 2 + handSpeed * 2;
+        ctx.stroke();
+
+        // 绘制能量波（快速移动时）
+        if (handSpeed > 0.3) {
+          for (let i = 0; i < 3; i++) {
+            ctx.beginPath();
+            ctx.arc(px, py, radius + i * 30, 0, Math.PI * 2);
+            ctx.strokeStyle = `rgba(100, 200, 255, ${0.3 - i * 0.1})`;
+            ctx.lineWidth = 2;
+            ctx.stroke();
+          }
+        }
+
+        // 绘制手部骨架（根据手势改变颜色）
+        const skeletonColors = {
+          open: 'rgba(150, 100, 255, 0.8)',
+          closed: 'rgba(255, 100, 100, 0.8)',
+          pointing: 'rgba(255, 150, 50, 0.8)',
+          pinch: 'rgba(100, 255, 150, 0.8)',
+          victory: 'rgba(255, 200, 0, 0.9)',
+          ok: 'rgba(100, 200, 255, 0.8)',
+          one: 'rgba(255, 100, 150, 0.9)',
+          sphere: 'rgba(100, 200, 255, 0.9)',
+        };
+        ctx.strokeStyle = skeletonColors[handData.gesture] || 'rgba(255, 255, 255, 0.5)';
+        ctx.lineWidth = 2 + handSpeed;
+
+        const connections = [
+          [0, 1],
+          [1, 2],
+          [2, 3],
+          [3, 4],
+          [0, 5],
+          [5, 6],
+          [6, 7],
+          [7, 8],
+          [5, 9],
+          [9, 10],
+          [10, 11],
+          [11, 12],
+          [9, 13],
+          [13, 14],
+          [14, 15],
+          [15, 16],
+          [13, 17],
+          [17, 18],
+          [18, 19],
+          [19, 20],
+          [0, 17],
+        ];
+
+        connections.forEach(([start, end]) => {
+          const startPoint = handData.landmarks[start];
+          const endPoint = handData.landmarks[end];
+          ctx.beginPath();
+          ctx.moveTo(startPoint.x * canvas.width, startPoint.y * canvas.height);
+          ctx.lineTo(endPoint.x * canvas.width, endPoint.y * canvas.height);
+          ctx.stroke();
+        });
+
+        // 胜利手势特殊效果：在手指周围绘制光环
+        if (handData.gesture === 'victory' && handData.landmarks) {
+          const indexTip = handData.landmarks[8];
+          const middleTip = handData.landmarks[12];
+          
+          [indexTip, middleTip].forEach((tip) => {
+            const tipX = tip.x * canvas.width;
+            const tipY = tip.y * canvas.height;
+            
+            // 绘制多层光环
+            for (let i = 0; i < 3; i++) {
+              ctx.beginPath();
+              ctx.arc(tipX, tipY, 15 + i * 10, 0, Math.PI * 2);
+              ctx.strokeStyle = `rgba(255, 200, 0, ${0.5 - i * 0.15})`;
+              ctx.lineWidth = 2;
+              ctx.stroke();
+            }
+          });
+        }
+
+        // OK手势特殊效果：在拇指和食指之间绘制连接线
+        if (handData.gesture === 'ok' && handData.landmarks) {
+          const thumbTip = handData.landmarks[4];
+          const indexTip = handData.landmarks[8];
+          
+          ctx.beginPath();
+          ctx.moveTo(thumbTip.x * canvas.width, thumbTip.y * canvas.height);
+          ctx.lineTo(indexTip.x * canvas.width, indexTip.y * canvas.height);
+          ctx.strokeStyle = 'rgba(100, 200, 255, 0.6)';
+          ctx.lineWidth = 3;
+          ctx.stroke();
+          
+          // 在连接点绘制光点
+          const midX = (thumbTip.x + indexTip.x) / 2 * canvas.width;
+          const midY = (thumbTip.y + indexTip.y) / 2 * canvas.height;
+          ctx.beginPath();
+          ctx.arc(midX, midY, 8, 0, Math.PI * 2);
+          ctx.fillStyle = 'rgba(100, 200, 255, 0.8)';
+          ctx.fill();
+        }
+      }
+
+      // 更新和绘制粒子
+      particles.forEach((particle) => {
+        particle.update(handData);
+        particle.draw();
+      });
+
+      // 粒子之间的连线（控制数量，减轻性能压力）
+      particles.forEach((p1, i) => {
+        // 只对前一部分粒子画连线，避免 O(N^2) 开销
+        if (i > 300) return;
+        particles.slice(i + 1, i + 4).forEach((p2) => {
+          const dx = p1.x - p2.x;
+          const dy = p1.y - p2.y;
+          const dist = Math.sqrt(dx * dx + dy * dy);
+
+          if (dist < 80) {
+            ctx.beginPath();
+            ctx.moveTo(p1.x, p1.y);
+            ctx.lineTo(p2.x, p2.y);
+            
+            // 根据手势和彩虹模式改变连线颜色
+            let hue = 200;
+            if (handData && rainbowMode) {
+              hue = (rainbowHue + dist * 2) % 360;
+            } else if (handData) {
+              const gestureHues = {
+                open: 280,
+                closed: 0,
+                pointing: 30,
+                pinch: 120,
+                victory: 60,
+                ok: 200,
+              };
+              hue = gestureHues[handData.gesture] || 200;
+            }
+            
+            ctx.strokeStyle = `hsla(${hue}, 70%, 60%, ${
+              (1 - dist / 100) * 0.4
+            })`;
+            ctx.lineWidth = 0.5;
+            ctx.stroke();
+          }
+        });
+      });
+
+      requestAnimationFrame(animate);
+    }
+
+    animate();
+
+    // 控制面板事件
+    document
+      .getElementById('particleCount')
+      .addEventListener('input', (e) => {
+        particleCount = parseInt(e.target.value, 10);
+        document.getElementById('particleCountValue').textContent =
+          particleCount;
+        initParticles();
+      });
+
+    document.getElementById('force').addEventListener('input', (e) => {
+      forceMultiplier = parseFloat(e.target.value);
+      document.getElementById('forceValue').textContent =
+        forceMultiplier.toFixed(1);
+    });
+
+    document.getElementById('trailMode').addEventListener('change', (e) => {
+      trailMode = e.target.checked;
+    });
+
+    document.getElementById('rainbowMode').addEventListener('change', (e) => {
+      rainbowMode = e.target.checked;
+    });
+
+    window.addEventListener('resize', () => {
+      canvas.width = window.innerWidth;
+      canvas.height = window.innerHeight;
+      initParticles();
+    });
+  </script>
+</body>
+</html>
+
+
