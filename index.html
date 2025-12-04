@@ -54,11 +54,50 @@
       left: 10px;
       background: rgba(0, 0, 0, 0.7);
       backdrop-filter: blur(10px);
-      padding: 15px;
+      padding: 12px 14px;
       border-radius: 10px;
       color: #fff;
       z-index: 10;
-      max-width: 260px;
+      max-width: 270px;
+    }
+
+    #controls h3 {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      font-size: 14px;
+      margin-bottom: 8px;
+      color: #4a90e2;
+    }
+
+    #controlsToggle {
+      font-size: 11px;
+      padding: 3px 8px;
+      border-radius: 999px;
+      border: 1px solid #4a90e2;
+      background: rgba(0, 0, 0, 0.6);
+      color: #4a90e2;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+
+    #controlsToggle:hover {
+      background: rgba(74, 144, 226, 0.15);
+    }
+
+    #controls.collapsed {
+      padding: 6px 10px;
+      max-width: 190px;
+    }
+
+    #controls.collapsed h3 {
+      margin-bottom: 0;
+      font-size: 13px;
+    }
+
+    #controls.collapsed #controlsContent {
+      display: none;
     }
 
     .control-group {
@@ -115,68 +154,73 @@
     <video id="video" autoplay playsinline></video>
 
     <div id="controls">
-      <h3>🎮 手势控制粒子系统</h3>
+      <h3>
+        🎮 手势控制粒子系统
+        <button id="controlsToggle" type="button">收起面板</button>
+      </h3>
 
-      <div id="status" class="status waiting">
-        正在初始化摄像头...
-      </div>
+      <div id="controlsContent">
+        <div id="status" class="status waiting">
+          正在初始化摄像头...
+        </div>
 
-      <div id="speedIndicator" style="font-size: 10px; color: #888; margin-bottom: 10px; display: none;">
-        移动速度: <span id="speedValue">0</span>
-      </div>
+        <div id="speedIndicator" style="font-size: 10px; color: #888; margin-bottom: 10px; display: none;">
+          移动速度: <span id="speedValue">0</span>
+        </div>
 
-      <div class="control-group">
-        <label>
-          粒子数量:
-          <span id="particleCountValue">600</span>
-        </label>
-        <input
-          type="range"
-          id="particleCount"
-          min="200"
-          max="1200"
-          value="600"
-        />
-      </div>
+        <div class="control-group">
+          <label>
+            粒子数量:
+            <span id="particleCountValue">600</span>
+          </label>
+          <input
+            type="range"
+            id="particleCount"
+            min="200"
+            max="1200"
+            value="600"
+          />
+        </div>
 
-      <div class="control-group">
-        <label>
-          交互强度:
-          <span id="forceValue">1.0</span>
-        </label>
-        <input
-          type="range"
-          id="force"
-          min="0.5"
-          max="3"
-          step="0.1"
-          value="1.0"
-        />
-      </div>
+        <div class="control-group">
+          <label>
+            交互强度:
+            <span id="forceValue">1.0</span>
+          </label>
+          <input
+            type="range"
+            id="force"
+            min="0.5"
+            max="3"
+            step="0.1"
+            value="1.0"
+          />
+        </div>
 
-      <div class="control-group">
-        <label>
-          <input type="checkbox" id="trailMode" checked />
-          拖尾效果
-        </label>
-      </div>
+        <div class="control-group">
+          <label>
+            <input type="checkbox" id="trailMode" checked />
+            拖尾效果
+          </label>
+        </div>
 
-      <div class="control-group">
-        <label>
-          <input type="checkbox" id="rainbowMode" />
-          彩虹模式
-        </label>
-      </div>
+        <div class="control-group">
+          <label>
+            <input type="checkbox" id="rainbowMode" />
+            彩虹模式
+          </label>
+        </div>
 
-      <div class="gesture-info">
-        <strong>手势说明：</strong><br />
-        ✋ 张开手掌 - 吸引粒子<br />
-        ✊ 握紧拳头 - 排斥粒子<br />
-        ☝️ 伸出食指 - 发射粒子<br />
-        🤏 捏合手势 - 形成旋转球体（地球）<br />
-        ✌️ 胜利手势 - 粒子爆炸<br />
-        👌 OK手势 - 粒子旋转<br />
-        ☝️ 比 1 手势 - 拼成文字
+        <div class="gesture-info">
+          <strong>手势说明：</strong><br />
+          ✋ 张开手掌 - 吸引粒子<br />
+          ✊ 握紧拳头 - 排斥粒子<br />
+          ☝️ 伸出食指 - 发射粒子<br />
+          🤏 捏合手势 - 形成旋转球体（地球）<br />
+          ✌️ 胜利手势 - 粒子爆炸<br />
+          👌 OK手势 - 粒子旋转<br />
+          ☝️ 比 1 手势 - 拼成文字
+        </div>
       </div>
     </div>
   </div>
@@ -186,6 +230,9 @@
     const ctx = canvas.getContext('2d');
     const video = document.getElementById('video');
     const statusDiv = document.getElementById('status');
+    const controls = document.getElementById('controls');
+    const controlsContent = document.getElementById('controlsContent');
+    const controlsToggle = document.getElementById('controlsToggle');
 
     canvas.width = window.innerWidth;
     canvas.height = window.innerHeight;
@@ -522,6 +569,12 @@
         particleSlider.max = 900;
         particleSlider.value = particleCount;
         particleValueSpan.textContent = particleCount;
+
+        // 手机默认折叠控制面板，只显示标题和按钮
+        if (controls && controlsToggle && controlsContent) {
+          controls.classList.add('collapsed');
+          controlsToggle.textContent = '展开面板';
+        }
       } else {
         particleCount = 600;
         particleSlider.min = 200;
@@ -530,6 +583,14 @@
         particleValueSpan.textContent = particleCount;
       }
     })();
+
+    // 控制面板展开 / 收起
+    if (controls && controlsToggle && controlsContent) {
+      controlsToggle.addEventListener('click', () => {
+        const collapsed = controls.classList.toggle('collapsed');
+        controlsToggle.textContent = collapsed ? '展开面板' : '收起面板';
+      });
+    }
 
     initParticles();
 
